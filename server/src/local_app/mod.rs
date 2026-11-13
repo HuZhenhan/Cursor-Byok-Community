@@ -1,9 +1,12 @@
 //! Exposes the local desktop application integration.
 mod account;
 mod ca;
+mod language;
 mod process;
 mod proxy;
 mod settings;
+
+pub use language::{CursorInstallPathInput, CursorLanguageInput, CursorLanguageStatus};
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -16,7 +19,7 @@ use crate::{
     Error, Result,
 };
 
-use self::{ca::CaManager, proxy::ProxyRuntime};
+use self::{ca::CaManager, language::CursorLanguage, proxy::ProxyRuntime};
 
 pub(crate) fn proxy_host_allowed(host: &str) -> bool {
     proxy::is_cursor_host(host)
@@ -80,10 +83,12 @@ struct Inner {
     backend_addr: RwLock<Option<SocketAddr>>,
     tab_mode: Arc<RwLock<TabMode>>,
     proxy: Mutex<ProxyRuntime>,
+    language: CursorLanguage,
 }
 
 impl CursorHarness {
     pub fn new(store: Store) -> Result<Self> {
+        let language = CursorLanguage::new(store.clone())?;
         Ok(Self {
             inner: Arc::new(Inner {
                 store,
@@ -92,8 +97,36 @@ impl CursorHarness {
                 backend_addr: RwLock::new(None),
                 tab_mode: Arc::new(RwLock::new(TabMode::default())),
                 proxy: Mutex::new(ProxyRuntime::default()),
+                language,
             }),
         })
+    }
+
+    pub async fn language_status(&self) -> Result<CursorLanguageStatus> {
+        self.inner.language.status().await
+    }
+
+    pub async fn set_language(
+        &self,
+        input: CursorLanguageInput,
+    ) -> Result<CursorLanguageStatus> {
+        self.inner.language.update(input).await
+    }
+
+    pub async fn set_language_install_path(
+        &self,
+        input: CursorInstallPathInput,
+    ) -> Result<CursorLanguageStatus> {
+        self.inner.language.set_install_path(input).await
+    }
+
+    pub async fn apply_language_on_startup(&self) {
+        self.inner.language.apply_on_startup().await;
+    }
+
+    /// Cursor 退出后检查上游语言包并在后台静默切换。
+    pub async fn watch_language_pack(&self, shutdown: tokio_util::sync::CancellationToken) {
+        self.inner.language.watch(shutdown).await;
     }
 
     pub fn set_backend_addr(&self, addr: SocketAddr) {

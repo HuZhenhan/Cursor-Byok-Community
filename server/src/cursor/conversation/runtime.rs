@@ -16,7 +16,7 @@ use crate::{
             tool_call_result::{tool_result_channel, ToolResultReceiver, ToolResultSender},
             ClientToolEvent, ToolDispatcher,
         },
-        transport::{OrderedInbox, TransportHandle},
+        transport::{OrderedInbox, TransportHandle, TransportParent},
     },
     run::{CommandResult, RunEngine, RunHandle, RunPhase},
 };
@@ -481,6 +481,17 @@ impl ConversationRuntime {
                                                 }
                                             }
                                         }
+                                        Some(
+                                            pb::conversation_action::Action::BackgroundSubagentAction(
+                                                action,
+                                            ),
+                                        ) => {
+                                            tracing::warn!(
+                                                request_id = handle.request_id(),
+                                                tool_call_id = action.tool_call_id,
+                                                "BackgroundSubagentAction is not attached to this conversation runtime; the Task is never started server-side"
+                                            );
+                                        }
                                         Some(action) => {
                                             tracing::warn!(
                                                 request_id = handle.request_id(),
@@ -523,6 +534,16 @@ async fn start_generation(
     request: pb::AgentRunRequest,
 ) {
     let previous_finished = if let Some(previous) = current.take() {
+        tracing::warn!(
+            request_id = handle.request_id(),
+            previous_generation = previous.id,
+            previous_run_id = previous
+                .run
+                .lock()
+                .as_ref()
+                .map(|run| run.run_id().to_string()),
+            "a new Cursor RunRequest arrived on this transport; the previous Run is cancelled"
+        );
         previous.superseded.cancel();
         if let Some(run) = previous.run.lock().clone() {
             run.cancel();
@@ -667,6 +688,7 @@ fn spawn_run_request(
                 return;
             }
         };
+        tag_subagent_run(&dependencies.store, handle.parent(), &request, &mut prepared).await;
         checkpoint.configure(
             prepared.model.model_id.clone(),
             prepared.model.context_window_tokens,
@@ -822,6 +844,53 @@ fn spawn_run_request(
                 .await;
         }
     });
+}
+
+/// Subagent Runs arrive on their own transport with parent headers. Tag the Run
+/// so the runs table shows that a delegated Run was started and which parent
+/// requested it; an untagged child is indistinguishable from a fresh root Run.
+async fn tag_subagent_run(
+    store: &crate::store::Store,
+    parent: Option<&TransportParent>,
+    request: &pb::AgentRunRequest,
+    prepared: &mut crate::model::PreparedRun,
+) {
+    let Some(parent) = parent else {
+        return;
+    };
+    let Some(subagent_type) = request.subagent_type_name.as_deref() else {
+        tracing::warn!(
+            request_id = %request.run_id.as_deref().unwrap_or_default(),
+            parent_request_id = parent.request_id,
+            "subagent Run has parent headers but no subagent type; keeping it untagged"
+        );
+        return;
+    };
+    let parent_run_id = match store.latest_run_for_cursor_request(&parent.request_id).await {
+        Ok(Some(parent_run_id)) => parent_run_id,
+        Ok(None) => {
+            tracing::warn!(
+                request_id = %prepared.cursor_request_id.as_deref().unwrap_or_default(),
+                parent_request_id = parent.request_id,
+                "subagent Run parent request has no persisted Run; keeping it untagged"
+            );
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                request_id = %prepared.cursor_request_id.as_deref().unwrap_or_default(),
+                parent_request_id = parent.request_id,
+                "cannot resolve the subagent parent Run; keeping it untagged"
+            );
+            return;
+        }
+    };
+    prepared.kind = crate::model::RunKind::Subagent {
+        parent_run_id,
+        parent_tool_call_id: parent.tool_call_id.clone(),
+        kind: compile::subagent_kind(subagent_type),
+    };
 }
 
 fn runtime_action_name(action: &pb::conversation_action::Action) -> &'static str {

@@ -159,10 +159,15 @@
   position: absolute;
   z-index: 12500;
   top: var(--window-safe-top);
+  // 同时锚定左右边界:页面操作栏始终留在内容列内,不会往左伸到侧边栏下方被裁切。
+  left: max(var(--app-page-padding), calc((100% - var(--app-page-max-width)) / 2));
   right: max(var(--app-page-padding), calc((100% - var(--app-page-max-width)) / 2));
   height: calc(var(--app-content-top) - var(--window-safe-top));
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  // 区域本身横跨整行,只在操作卡片上接收点击,避免挡住页面顶部内容。
+  pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
   -moz-user-select: none;
@@ -179,16 +184,27 @@
 .actions {
   height: var(--app-toolbar-height);
   min-width: var(--app-toolbar-height);
+  max-width: 100%;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  pointer-events: auto;
   padding: 6px 6px;
   gap: 3px;
+  // 内容超出内容列宽度时横向滚动,而不是把左侧操作藏到侧边栏下面。
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
   box-shadow: 0 0px 6px 4px var(--vscode-editor-background);
   transform: translateX(6px);
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 .pageActions {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 3px;

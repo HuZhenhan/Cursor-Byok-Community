@@ -146,6 +146,13 @@ impl App {
         tracing::info!(%address, "cursor server listening");
         let registry = self.registry;
         let harness = self.harness;
+        let language = harness.clone();
+        let watcher = harness.clone();
+        let watcher_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            language.apply_language_on_startup().await;
+            watcher.watch_language_pack(watcher_shutdown).await;
+        });
         let graceful = shutdown.clone();
         let server = axum::serve(listener, self.router)
             .with_graceful_shutdown(async move {

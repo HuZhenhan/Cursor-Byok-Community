@@ -2,6 +2,8 @@
 
 .page {
   display: grid;
+  // 单列自适应:列宽不允许被内部宽表格的 min-width 撑开,否则整页会超出内容区。
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
 }
 
@@ -11,15 +13,8 @@
   gap: 7px;
 }
 
-.takeoverStatus {
-  min-width: 39px;
-  color: var(--vscode-descriptionForeground);
-  font-size: type.$font-size-xs;
-  text-align: right;
-  white-space: nowrap;
-}
-
 .groupActions {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   overflow: hidden;
@@ -72,17 +67,54 @@
   }
 }
 
+.gridSection {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.gridToolbar {
+  display: flex;
+  align-items: center;
+  padding: 0 2px 8px;
+}
 .modelGrid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
   gap: 12px;
 
 }
+.list {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.listToolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 10px;
+  padding: 2px 2px 0;
+  // 始终单行:空间不足时整条横向滚动,而不是把批量操作挤到第二行。
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+
+  // 分组切换永远完整显示;批量操作靠右。
+  .groupActions:last-child {
+    margin-left: auto;
+  }
+}
 .modelGroups {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding-top: 10px;
 }
 .groupCard {
   padding: 4px 12px 8px;
@@ -208,6 +240,12 @@
     font-size: type.$font-size-2xs;
   }
 }
+.modelCardBadges {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .modelTypeBadge {
   flex: 0 0 auto;
   display: inline-flex;
@@ -310,6 +348,159 @@
   min-height: 34px;
   height: 34px;
   flex: 0 0 auto;
+}
+.contextField {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.contextPresets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+
+  button {
+    height: 24px;
+    padding: 0 9px;
+    color: var(--vscode-descriptionForeground);
+    background: transparent;
+    border: 1px solid var(--vscode-input-border, var(--vscode-sideBar-border));
+    border-radius: 999px;
+    font-size: type.$font-size-2xs;
+    white-space: nowrap;
+    cursor: pointer;
+
+    &:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+    &[aria-pressed="true"] {
+      color: var(--vscode-list-activeSelectionForeground);
+      background: var(--vscode-list-activeSelectionBackground);
+      border-color: var(--vscode-focusBorder);
+    }
+    &:disabled { opacity: 0.5; cursor: not-allowed; }
+  }
+}
+.batchAdd {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--vscode-sideBar-border);
+  border-radius: 6px;
+}
+.batchAddHeader {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.batchAddTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--vscode-foreground);
+  font-size: type.$font-size-xs;
+}
+.batchAddList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 6px 12px;
+  color: var(--vscode-descriptionForeground);
+  font-size: type.$font-size-xs;
+
+  > label {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+}
+.batchHint {
+  margin: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: type.$font-size-xs;
+}
+.batchDiscover {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tableCard {
+  min-width: 0;
+  padding: 0 12px 4px;
+}
+.tableScroll {
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.tableHeader,
+.tableRow {
+  min-width: 760px;
+  display: grid;
+  grid-template-columns: 20px 24px minmax(120px, 1.8fr) minmax(80px, 1fr) 76px 56px minmax(70px, 1fr) 84px 36px;
+  align-items: center;
+  gap: 8px;
+}
+.tableHeader {
+  padding: 10px 2px 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: type.$font-size-2xs;
+  border-bottom: 1px solid var(--vscode-sideBar-border);
+}
+.tableBody {
+  display: flex;
+  flex-direction: column;
+}
+.tableRow {
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--vscode-sideBar-border);
+
+  &:last-child {
+    border-bottom: 0;
+  }
+
+  .modelCardActions {
+    gap: 6px;
+  }
+}
+.tableDragCell {
+  display: grid;
+  place-items: center;
+}
+.tableSortHandle {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: grab;
+
+  &:hover {
+    color: var(--vscode-foreground);
+    background: var(--vscode-list-hoverBackground);
+  }
+  &:active {
+    cursor: grabbing;
+  }
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.3;
+  }
+}
+.tableSpeedCell {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.tableText {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font-size: type.$font-size-xs;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .urlField {
   min-width: 0;

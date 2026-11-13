@@ -153,6 +153,34 @@ pub struct ModelConfig {
 }
 
 impl ModelConfig {
+    /// 导出与再导入使用的完整配置输入;保留 API Key、扩展参数和自定义请求头。
+    pub fn input(&self) -> ModelConfigInput {
+        ModelConfigInput {
+            sort_order: self.sort_order,
+            display_name: self.display_name.clone(),
+            group_name: self.group_name.clone(),
+            model_type: self.model_type,
+            base_url: self.base_url.clone(),
+            use_full_url: self.use_full_url,
+            api_key: self.api_key.clone(),
+            tooltip_data: self.tooltip_data.clone(),
+            model_id: self.model_id.clone(),
+            reasoning_effort: self.reasoning_effort.clone(),
+            openai_endpoint: self.openai_endpoint.clone(),
+            openai_extra_params_enabled: self.openai_extra_params_enabled,
+            openai_extra_params: self.openai_extra_params.clone(),
+            custom_headers_enabled: self.custom_headers_enabled,
+            custom_headers: self.custom_headers.clone(),
+            anthropic_extra_params_enabled: self.anthropic_extra_params_enabled,
+            anthropic_extra_params: self.anthropic_extra_params.clone(),
+            context_window_tokens: self.context_window_tokens,
+            max_completion_tokens: self.max_completion_tokens,
+            anthropic_max_tokens: self.anthropic_max_tokens,
+            anthropic_thinking_effort: self.anthropic_thinking_effort.clone(),
+            thinking_budget_tokens: self.thinking_budget_tokens,
+        }
+    }
+
     pub fn provider_type(&self) -> ProviderType {
         match self.model_type {
             ModelType::Anthropic => ProviderType::Anthropic,
@@ -216,7 +244,8 @@ pub fn normalize_model_input(input: &ModelConfigInput) -> Result<ModelConfigInpu
         .map(String::from);
     let base_url = normalize_request_url(&input.base_url)?;
     let api_key = required(&input.api_key, "model API key")?;
-    let tooltip_data = required(&input.tooltip_data, "model tooltip")?;
+    // 备注是选填的展示字段,留空时保持空字符串,不影响模型身份哈希。
+    let tooltip_data = input.tooltip_data.trim().to_owned();
     let model_id = required(&input.model_id, "model id")?;
     let reasoning_effort = normalize_effort(input.reasoning_effort.as_deref(), true)?;
     let anthropic_thinking_effort = match input.model_type {

@@ -19,7 +19,6 @@ pub enum RunKind {
         parent_run_id: RunId,
         parent_tool_call_id: String,
         kind: SubagentKind,
-        background: bool,
     },
 }
 

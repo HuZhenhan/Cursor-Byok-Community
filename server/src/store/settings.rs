@@ -14,12 +14,11 @@ const COMMIT_SETTINGS_KEY: &str = "commit_settings";
 const CURSOR_TAKEOVER_ENABLED_KEY: &str = "cursor_takeover_enabled";
 const PRICING_SETTINGS_KEY: &str = "token_pricing";
 const EXTERNAL_API_SETTINGS_KEY: &str = "external_api";
+const CURSOR_LANGUAGE_KEY: &str = "cursor_language";
 
 /// Embedded default system prompts for commit message generation.
 pub const DEFAULT_COMMIT_PROMPT_ZH_CN: &str = include_str!("../../prompt/cursor/commit/zh-CN.md");
 pub const DEFAULT_COMMIT_PROMPT_EN_US: &str = include_str!("../../prompt/cursor/commit/en-US.md");
-
-pub const PUBLIC_TAB_SERVICE_URL: &str = "https://tab.leokun.cn";
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct PortSettings {
@@ -69,9 +68,12 @@ impl ProxyMode {
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TabMode {
+    /// 用已配置的 BYOK 模型在本地生成补全。
     #[default]
-    Public,
+    Local,
+    /// 转发到 Cursor 官方后端，需要有效的 Cursor 登录态。
     Direct,
+    /// 转发到自建的 TAB 服务。
     Custom,
 }
 
@@ -79,6 +81,9 @@ pub enum TabMode {
 pub struct TabSettings {
     pub mode: TabMode,
     pub address: String,
+    /// `Local` 模式使用的模型标识(model hash 或插件模型 ID)。
+    #[serde(default)]
+    pub model_id: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -102,11 +107,55 @@ fn default_true() -> bool {
     true
 }
 
+/// Cursor 汉化方式。`Full` 改写 Cursor 程序内的硬编码文案，需要写入安装目录的权限；
+/// `Extension` 只安装语言扩展，不需要管理员权限，但部分 Cursor 专有界面仍是英文。
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorLanguageMode {
+    #[default]
+    Full,
+    Extension,
+}
+
+/// 最近一次成功应用汉化时的 Cursor 版本、语言包版本与补充词库版本，用于判断是否需要重新应用。
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct CursorLanguageApplied {
+    pub mode: CursorLanguageMode,
+    pub cursor_version: String,
+    pub pack_version: String,
+    /// BYOK 补充词库版本；缺省视为未补充，需要重新应用。
+    #[serde(default)]
+    pub supplement_version: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct CursorLanguageSettings {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub mode: CursorLanguageMode,
+    #[serde(default)]
+    pub applied: Option<CursorLanguageApplied>,
+    /// 手动指定的 Cursor 安装位置；留空时按平台常见位置自动探测。
+    #[serde(default)]
+    pub install_path: Option<String>,
+}
+
+impl Default for CursorLanguageSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            mode: CursorLanguageMode::Full,
+            applied: None,
+            install_path: None,
+        }
+    }
+}
+
 impl TabSettings {
     pub fn service_url(&self) -> Option<&str> {
         match self.mode {
-            TabMode::Public => Some(PUBLIC_TAB_SERVICE_URL),
-            TabMode::Direct => None,
+            TabMode::Local | TabMode::Direct => None,
             TabMode::Custom => Some(&self.address),
         }
     }
@@ -250,6 +299,35 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(settings)
+    }
+
+    pub async fn cursor_language_settings(&self) -> Result<CursorLanguageSettings> {
+        let value = sqlx::query_scalar::<_, String>(
+            "SELECT value_json FROM service_settings WHERE setting_key = ?",
+        )
+        .bind(CURSOR_LANGUAGE_KEY)
+        .fetch_optional(&self.pool)
+        .await?;
+        value
+            .map(|value| serde_json::from_str(&value).map_err(Into::into))
+            .unwrap_or_else(|| Ok(CursorLanguageSettings::default()))
+    }
+
+    pub async fn set_cursor_language_settings(
+        &self,
+        settings: CursorLanguageSettings,
+    ) -> Result<()> {
+        let value_json = serde_json::to_string(&settings)?;
+        let _write = self.writes.lock().await;
+        sqlx::query(
+            "INSERT INTO service_settings(setting_key, value_json, updated_at_ms) VALUES (?, ?, ?) ON CONFLICT(setting_key) DO UPDATE SET value_json = excluded.value_json, updated_at_ms = excluded.updated_at_ms",
+        )
+        .bind(CURSOR_LANGUAGE_KEY)
+        .bind(value_json)
+        .bind(now_ms())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub(crate) async fn cursor_takeover_enabled(&self) -> Result<bool> {

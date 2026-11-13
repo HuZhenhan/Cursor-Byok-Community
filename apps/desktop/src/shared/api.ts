@@ -86,6 +86,27 @@ export interface LegacyModelImportResult {
   total: number;
 }
 
+export interface ModelImportPreviewItem {
+  model_hash: string;
+  display_name: string;
+  model_id: string;
+  type: ModelType;
+  existing: boolean;
+}
+
+export interface ModelImportPreview {
+  total: number;
+  new_models: number;
+  existing_models: number;
+  models: ModelImportPreviewItem[];
+}
+
+export interface ModelImportResult {
+  imported: number;
+  skipped: number;
+  total: number;
+}
+
 export interface ModelConnectivityResult {
   duration_ms: number;
   first_valid_response_ms: number | null;
@@ -106,6 +127,21 @@ export interface CursorHarnessStatus {
   settings_applied: boolean;
   proxy_url: string | null;
   ca_install_command: string | null;
+}
+
+export type CursorLanguageMode = "full" | "extension";
+export type CursorLanguageState = "disabled" | "pending" | "applying" | "applied" | "degraded" | "unsupported" | "failed";
+
+export interface CursorLanguageStatus {
+  enabled: boolean;
+  mode: CursorLanguageMode;
+  state: CursorLanguageState;
+  cursor_version: string | null;
+  pack_version: string;
+  locale: string;
+  error: string | null;
+  install_path: string | null;
+  custom_path: string | null;
 }
 
 export interface PortSettings {
@@ -143,11 +179,12 @@ export interface ProxySettingsInput {
   password?: string;
 }
 
-export type TabMode = "public" | "direct" | "custom";
+export type TabMode = "local" | "direct" | "custom";
 
 export interface TabSettings {
   mode: TabMode;
   address: string;
+  model_id: string;
 }
 
 export interface DesktopSettings {
@@ -475,6 +512,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function requestText(path: string): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_ROOT}${path}`);
+  } catch (cause) {
+    throw new Error(t("无法连接本地管理服务"), { cause });
+  }
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  return response.text();
+}
+
 export const api = {
   ads: (disabledAdIds: Iterable<string>, locale: Locale) => {
     const value = [...disabledAdIds].join(",");
@@ -492,6 +540,8 @@ export const api = {
   discoverModels: (input: ModelDiscoveryInput) => request<{ models: string[] }>("/models/discover", { method: "POST", body: JSON.stringify(input) }),
   previewV0049Models: () => request<LegacyModelImportPreview>("/models/import-v0049"),
   importV0049Models: () => request<LegacyModelImportResult>("/models/import-v0049", { method: "POST" }),
+  previewModelImport: (models: ModelInput[]) => request<ModelImportPreview>("/models/import/preview", { method: "POST", body: JSON.stringify({ models }) }),
+  importModels: (models: ModelInput[]) => request<ModelImportResult>("/models/import", { method: "POST", body: JSON.stringify({ models }) }),
   updateModel: (hash: string, model: ModelInput) => request<Model>(`/models/${hash}`, { method: "PUT", body: JSON.stringify(model) }),
   deleteModel: (hash: string) => request<void>(`/models/${hash}`, { method: "DELETE" }),
   testModel: (hash: string, testId: string, signal?: AbortSignal) => request<ModelConnectivityResult>(`/models/${encodeURIComponent(hash)}/test/${encodeURIComponent(testId)}`, { method: "POST", signal }),
@@ -519,6 +569,17 @@ export const api = {
   syncPluginModels: (pluginId: string, providerId: string) => request<{ models: number }>(`/plugins/${encodeURIComponent(pluginId)}/providers/${encodeURIComponent(providerId)}/models/sync`, { method: "POST" }),
   setPluginModelEnabled: (pluginId: string, providerId: string, modelId: string, enabled: boolean) => request<void>(`/plugins/${encodeURIComponent(pluginId)}/providers/${encodeURIComponent(providerId)}/models/enabled`, { method: "PUT", body: JSON.stringify({ modelId, enabled }) }),
   pluginResourceExportUrl: (servicePort: number, pluginId: string, resourceType: string) => `http://127.0.0.1:${servicePort}${API_ROOT}/plugins/${encodeURIComponent(pluginId)}/resources/${encodeURIComponent(resourceType)}/export`,
+  saveModelExport: async (): Promise<string | null> => {
+    if (!packagedDesktop) throw new Error(t("请在桌面应用中导出模型"));
+    const contents = await requestText("/models/export");
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<string | null>("save_text_file", { contents, suggestedName: "cursor-byok-models.json" });
+  },
+  openModelImportFile: async (): Promise<{ path: string; contents: string } | null> => {
+    if (!packagedDesktop) throw new Error(t("请在桌面应用中导入模型"));
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<{ path: string; contents: string } | null>("open_text_file");
+  },
   removePluginConfiguration: (pluginId: string) => request<void>(`/plugins/${encodeURIComponent(pluginId)}`, { method: "DELETE" }),
   pluginRuntime: () => request<PluginRuntimeStatus>("/plugins/runtime"),
   initializePluginRuntime: () => request<PluginRuntimeStatus>("/plugins/runtime", { method: "POST" }),
@@ -534,6 +595,14 @@ export const api = {
     await writeText(text);
   },
   setCursorEnabled: (enabled: boolean) => request<CursorHarnessStatus>("/harness/cursor/enabled", { method: "PUT", body: JSON.stringify({ enabled }) }),
+  cursorLanguage: () => request<CursorLanguageStatus>("/harness/cursor/language"),
+  setCursorLanguage: (input: { enabled: boolean; mode: CursorLanguageMode }) => request<CursorLanguageStatus>("/harness/cursor/language", { method: "PUT", body: JSON.stringify(input) }),
+  setCursorInstallPath: (path: string | null) => request<CursorLanguageStatus>("/harness/cursor/install-path", { method: "PUT", body: JSON.stringify({ path }) }),
+  pickDirectory: async (title: string): Promise<string | null> => {
+    if (!packagedDesktop) throw new Error(t("请在桌面应用中选择目录"));
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<string | null>("pick_directory", { title });
+  },
   calls: () => request<LlmCall[]>("/llm-calls?limit=200"),
   call: (id: string) => request<CallDetail>(`/llm-calls/${encodeURIComponent(id)}`),
   openCallDetails: async (id: string) => {

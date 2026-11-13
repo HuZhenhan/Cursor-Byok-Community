@@ -65,6 +65,12 @@ impl Store {
                 .await?;
         if let Some(replaced) = replaced.as_deref() {
             if replaced != prepared.run_id.as_str() {
+                tracing::warn!(
+                    conversation_id = %prepared.conversation_id,
+                    cancelled_run_id = replaced,
+                    claimed_run_id = %prepared.run_id,
+                    "a new Run claimed this conversation; the previously active Run is cancelled"
+                );
                 sqlx::query(
                     "UPDATE runs SET status = 'cancelled', updated_at_ms = ?
                      WHERE run_id = ? AND status = 'running'",
@@ -131,13 +137,13 @@ impl Store {
         })
     }
 
-    pub async fn active_run_for_cursor_request(
+    pub async fn latest_run_for_cursor_request(
         &self,
         cursor_request_id: &str,
     ) -> Result<Option<RunId>> {
         let run_id: Option<String> = sqlx::query_scalar(
             "SELECT run_id FROM runs
-             WHERE cursor_request_id = ? AND status = 'running'
+             WHERE cursor_request_id = ?
              ORDER BY created_at_ms DESC
              LIMIT 1",
         )
@@ -262,7 +268,6 @@ fn run_kind_columns(kind: &RunKind) -> (Option<&str>, Option<&str>, &'static str
             parent_run_id,
             parent_tool_call_id,
             kind,
-            ..
         } => (
             Some(parent_run_id.as_str()),
             Some(parent_tool_call_id.as_str()),

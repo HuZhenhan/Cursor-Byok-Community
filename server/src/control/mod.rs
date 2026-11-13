@@ -23,7 +23,8 @@ use url::{Host, Url};
 
 pub use service::{
     CallDetail, CallSummary, ControlService, DiscoveredModels, LegacyModelImportPreview,
-    LegacyModelImportResult, ModelConnectivityResult, ModelDiscoveryInput, ObservabilitySettings,
+    LegacyModelImportResult, ModelConnectivityResult, ModelDiscoveryInput, ModelImportPreview,
+    ModelImportResult, ObservabilitySettings,
 };
 
 pub fn web_router(service: ControlService, assets: impl AsRef<std::path::Path>) -> Router {
@@ -125,6 +126,12 @@ pub fn api_router(service: ControlService) -> Router {
             get(models::list).post(models::create),
         )
         .route("/__byok-api__/api/models/discover", post(models::discover))
+        .route("/__byok-api__/api/models/export", get(models::export))
+        .route("/__byok-api__/api/models/import", post(models::import))
+        .route(
+            "/__byok-api__/api/models/import/preview",
+            post(models::preview_import),
+        )
         .route(
             "/__byok-api__/api/models/import-v0049",
             get(models::preview_v0049).post(models::import_v0049),
@@ -235,6 +242,14 @@ pub fn api_router(service: ControlService) -> Router {
         .route(
             "/__byok-api__/api/harness/cursor/enabled",
             put(harness::set_enabled),
+        )
+        .route(
+            "/__byok-api__/api/harness/cursor/language",
+            get(harness::language).put(harness::set_language),
+        )
+        .route(
+            "/__byok-api__/api/harness/cursor/install-path",
+            put(harness::set_language_install_path),
         )
         .with_state(service)
         .layer(desktop_cors())

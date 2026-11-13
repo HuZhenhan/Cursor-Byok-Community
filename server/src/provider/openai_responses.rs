@@ -8,7 +8,8 @@ use serde_json::{json, Map, Value};
 use crate::{
     config::ProviderConfig,
     model::{
-        ContentPart, ModelInvocation, ModelLatency, ProjectedContent, ProjectedMessage, Role, Usage,
+        ContentPart, ModelInvocation, ModelLatency, ModelRequest, ProjectedContent,
+        ProjectedMessage, Role, Usage,
     },
     Error, Result,
 };
@@ -69,33 +70,44 @@ impl Provider for OpenAiResponsesProvider {
         let recorder = self.recorder.clone();
         Box::pin(try_stream! {
             let ModelInvocation { call_id, request, .. } = invocation;
-            let input = responses_input(&request.history)?;
-            let mut body = json!({
-                "model": request.model.model_id, "input": input, "stream": true,
-                "instructions": request.prompt.instructions,
-                "include": ["reasoning.encrypted_content"]
-            });
-            if !request.prompt.tools.is_empty() {
-                body["tools"] = json!(request.prompt.tools.iter().map(|tool| json!({
-                    "type":"function", "name":tool.name, "description":tool.description,
-                    "parameters":tool.parameters, "strict":false
-                })).collect::<Vec<_>>());
-            }
-            apply_model(&mut body, &request.model, config.max_output_tokens)?;
-            merge_extra_params(&mut body, &request.model.extra_params)?;
-            apply_openai_prompt_cache_key(&mut body, &request.model.model_id)?;
-            apply_body_allowlist(&mut body, config.allowed_body_fields.as_ref())?;
+            let mut replay_reasoning = has_responses_replay_state(&request.history);
+            let mut body = responses_body(&request, &config, replay_reasoning)?;
             let request_headers = recorded_headers(&config, &[("content-type", "application/json")]);
             if let Some(recorder) = &recorder {
                 recorder.request(request_headers.clone(), &body).await?;
             }
-            let attempt = send_once(
+            let mut attempt = send_once(
                 "OpenAI Responses",
-                || client.post(&config.request_url)
-                    .bearer_auth(&config.api_key).headers(config.custom_headers.clone()).json(&body),
+                || responses_post(&client, &config, &body),
                 &cancellation,
                 recorder.as_ref(),
-            ).await?;
+            ).await;
+            // Azure OpenAI 把 item id 绑定到创建它的资源,中转站又会在多个资源之间轮转。
+            // 一旦上游以跨资源为由拒绝,本请求立刻丢掉全部回放状态重发一次,避免把
+            // 用户困在同一个 400 上。
+            let stale_state = replay_reasoning
+                && attempt
+                    .as_ref()
+                    .err()
+                    .is_some_and(|error| is_foreign_resource_state(&error.to_string()));
+            if stale_state {
+                tracing::warn!(
+                    model = %request.model.model_id,
+                    "upstream rejected cross-resource reasoning state; retrying without replay"
+                );
+                replay_reasoning = false;
+                body = responses_body(&request, &config, replay_reasoning)?;
+                if let Some(recorder) = &recorder {
+                    recorder.request(request_headers, &body).await?;
+                }
+                attempt = send_once(
+                    "OpenAI Responses",
+                    || responses_post(&client, &config, &body),
+                    &cancellation,
+                    recorder.as_ref(),
+                ).await;
+            }
+            let attempt = attempt.map_err(readable_foreign_resource_error)?;
             let Attempt::Response(response) = attempt else { return };
             yield ModelEvent::Start { model_call_id: call_id };
             let chunk_recorder = recorder.clone();
@@ -273,6 +285,74 @@ impl Provider for OpenAiResponsesProvider {
     }
 }
 
+fn responses_post(
+    client: &reqwest::Client,
+    config: &ProviderConfig,
+    body: &Value,
+) -> reqwest::RequestBuilder {
+    client
+        .post(&config.request_url)
+        .bearer_auth(&config.api_key)
+        .headers(config.custom_headers.clone())
+        .json(body)
+}
+
+fn responses_body(
+    request: &ModelRequest,
+    config: &ProviderConfig,
+    replay_reasoning: bool,
+) -> Result<Value> {
+    let input = responses_input(&request.history, replay_reasoning)?;
+    let mut body = json!({
+        "model": request.model.model_id, "input": input, "stream": true,
+        "instructions": request.prompt.instructions,
+        "include": ["reasoning.encrypted_content"]
+    });
+    if !request.prompt.tools.is_empty() {
+        body["tools"] = json!(request.prompt.tools.iter().map(|tool| json!({
+            "type":"function", "name":tool.name, "description":tool.description,
+            "parameters":tool.parameters, "strict":false
+        })).collect::<Vec<_>>());
+    }
+    apply_model(&mut body, &request.model, config.max_output_tokens)?;
+    merge_extra_params(&mut body, &request.model.extra_params)?;
+    apply_openai_prompt_cache_key(&mut body, &request.model.model_id)?;
+    apply_body_allowlist(&mut body, config.allowed_body_fields.as_ref())?;
+    Ok(body)
+}
+
+/// 历史里是否存在可以回放的 Responses 推理状态。
+fn has_responses_replay_state(history: &[ProjectedMessage]) -> bool {
+    history.iter().any(|message| match &message.content {
+        ProjectedContent::Assistant { replay_state, .. } => replay_state
+            .as_ref()
+            .is_some_and(|state| state.provider_kind == "openai_responses"),
+        _ => false,
+    })
+}
+
+/// Azure OpenAI 只允许在创建 item 的那个资源里引用它;中转站把同一个地址后面
+/// 的请求分发到多个资源,所以这类拒绝无法在本地提前判断,只能按错误文本识别。
+fn is_foreign_resource_state(message: &str) -> bool {
+    message
+        .to_ascii_lowercase()
+        .contains("different azure openai resource")
+}
+
+/// 把上游跨资源拒绝翻译成用户能行动的错误,并保留原始响应便于排查。
+fn readable_foreign_resource_error(error: Error) -> Error {
+    let Error::Provider(message) = &error else {
+        return error;
+    };
+    if !is_foreign_resource_state(message) {
+        return error;
+    }
+    Error::Provider(format!(
+        "OpenAI Responses 拒绝了由其他上游资源创建的会话状态;已改用无状态请求重试仍被拒绝。\
+         请新建会话,或让该模型配置指向创建这份状态的资源。上游原始响应: {message}"
+    ))
+}
+
 fn response_item_text(item: &Value) -> Option<String> {
     let text = item
         .get("content")?
@@ -383,7 +463,7 @@ fn apply_model(
     Ok(())
 }
 
-fn responses_input(messages: &[ProjectedMessage]) -> Result<Vec<Value>> {
+fn responses_input(messages: &[ProjectedMessage], replay_reasoning: bool) -> Result<Vec<Value>> {
     let mut input = Vec::new();
     for message in messages {
         match &message.content {
@@ -408,23 +488,27 @@ fn responses_input(messages: &[ProjectedMessage]) -> Result<Vec<Value>> {
                 calls,
                 ..
             } => {
-                if let Some(state) = replay_state
-                    .as_ref()
-                    .filter(|state| state.provider_kind == "openai_responses")
-                {
-                    let items = state
-                        .value
-                        .get("items")
-                        .and_then(Value::as_array)
-                        .ok_or_else(|| {
-                            Error::Protocol("OpenAI Responses replay state is missing items".into())
-                        })?;
-                    input.extend(
-                        items
-                            .iter()
-                            .map(response_reasoning_input)
-                            .collect::<Result<Vec<_>>>()?,
-                    );
+                if replay_reasoning {
+                    if let Some(state) = replay_state
+                        .as_ref()
+                        .filter(|state| state.provider_kind == "openai_responses")
+                    {
+                        let items = state
+                            .value
+                            .get("items")
+                            .and_then(Value::as_array)
+                            .ok_or_else(|| {
+                                Error::Protocol(
+                                    "OpenAI Responses replay state is missing items".into(),
+                                )
+                            })?;
+                        input.extend(
+                            items
+                                .iter()
+                                .map(response_reasoning_input)
+                                .collect::<Result<Vec<_>>>()?,
+                        );
+                    }
                 }
                 push_responses_text(&mut input, &message.role, text);
                 for call in calls {
@@ -441,6 +525,8 @@ fn responses_input(messages: &[ProjectedMessage]) -> Result<Vec<Value>> {
     Ok(input)
 }
 
+/// 只回放可移植字段。`id` 属于创建它的上游资源(Azure OpenAI 尤其如此),
+/// 换资源或换中转后回放旧 `id` 会被拒绝,因此这里一律丢弃。
 fn response_reasoning_input(item: &Value) -> Result<Value> {
     let source = item
         .as_object()
@@ -450,7 +536,7 @@ fn response_reasoning_input(item: &Value) -> Result<Value> {
         })?;
     let mut projected = Map::new();
     projected.insert("type".into(), json!("reasoning"));
-    for field in ["id", "summary", "content", "encrypted_content"] {
+    for field in ["summary", "content", "encrypted_content"] {
         if let Some(value) = source.get(field) {
             projected.insert(field.into(), value.clone());
         }
@@ -544,9 +630,8 @@ mod tests {
     use super::*;
     use crate::model::ProviderReplayState;
 
-    #[test]
-    fn reasoning_replay_projects_response_items_to_valid_input_items() {
-        let messages = [ProjectedMessage {
+    fn assistant_with_replay_state() -> ProjectedMessage {
+        ProjectedMessage {
             message_id: "assistant-1".into(),
             role: Role::Assistant,
             content: ProjectedContent::Assistant {
@@ -568,17 +653,48 @@ mod tests {
                 }),
                 calls: Vec::new(),
             },
-        }];
+        }
+    }
+
+    #[test]
+    fn reasoning_replay_drops_resource_scoped_item_ids() {
+        // 复现上游报错:回放里带着另一个 Azure 资源创建的 item id。
+        let messages = [assistant_with_replay_state()];
 
         assert_eq!(
-            responses_input(&messages).unwrap(),
+            responses_input(&messages, true).unwrap(),
             vec![json!({
                 "type": "reasoning",
-                "id": "item-1",
                 "summary": [{"type": "summary_text", "text": "why"}],
                 "content": [],
                 "encrypted_content": "opaque"
             })]
+        );
+    }
+
+    #[test]
+    fn replay_can_be_disabled_for_the_stateless_retry() {
+        let messages = [assistant_with_replay_state()];
+
+        assert!(responses_input(&messages, false).unwrap().is_empty());
+        assert!(has_responses_replay_state(&messages));
+    }
+
+    #[test]
+    fn foreign_resource_rejections_are_detected_and_explained() {
+        let upstream = Error::Provider(format!(
+            "OpenAI Responses 400 Bad Request: {{\"error\":{{\"message\":\"The requested item was \
+             created under a different Azure OpenAI resource. Use the same resource that created \
+             the item to access it.\"}}}}"
+        ));
+        let readable = readable_foreign_resource_error(upstream).to_string();
+        assert!(readable.contains("无状态请求"));
+        assert!(readable.contains("different Azure OpenAI resource"));
+
+        let unrelated = Error::Provider("OpenAI Responses 429 Too Many Requests".into());
+        assert_eq!(
+            readable_foreign_resource_error(unrelated).to_string(),
+            "provider error: OpenAI Responses 429 Too Many Requests"
         );
     }
 }

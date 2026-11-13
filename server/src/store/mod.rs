@@ -8,6 +8,7 @@ mod legacy_config;
 mod llm_calls;
 mod messages;
 mod migrations;
+mod model_import;
 mod models;
 mod overview;
 mod runs;

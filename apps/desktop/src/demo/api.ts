@@ -1,6 +1,7 @@
 import type {
   CallDetail,
   CursorHarnessStatus,
+  CursorLanguageStatus,
   ExternalApiSettings,
   LlmCall,
   Model,
@@ -85,6 +86,17 @@ let harnessStatus: CursorHarnessStatus = {
   ca_install_command: null,
 };
 
+let cursorLanguage: CursorLanguageStatus = {
+  enabled: true,
+  mode: "full",
+  state: "applied",
+  cursor_version: "3.27.6",
+  pack_version: "1.1.4",
+  locale: "zh-cn",
+  error: null,
+  install_path: "C:\\Users\\demo\\AppData\\Local\\Programs\\cursor",
+  custom_path: null,
+};
 let detailed = true;
 let portSettings = { proxy_port: 0, service_port: 0 };
 let externalApiSettings: ExternalApiSettings = { enabled: false, api_key: "" };
@@ -95,7 +107,7 @@ let proxySettings: ProxySettings = {
   username: "",
   has_password: false,
 };
-let tabSettings: TabSettings = { mode: "public", address: "" };
+let tabSettings: TabSettings = { mode: "local", address: "", model_id: "" };
 let storage: StatisticsStorage = { call_count: calls.length, trace_count: calls.length };
 
 export function installDemoApi() {
@@ -119,6 +131,8 @@ export function installDemoApi() {
       return json({ source: "demo", total: 0, new_models: 0, existing_models: 0, models: [] });
     }
     if (path === "/models/import-v0049") return json({ imported: 0, skipped: 0, total: 0 });
+    if (path === "/models/import/preview") return json({ total: 0, new_models: 0, existing_models: 0, models: [] });
+    if (path === "/models/import") return json({ imported: 0, skipped: 0, total: 0 });
     if (/^\/models\/[^/]+\/test\/[^/]+$/.test(path) && method === "POST") {
       return json({ duration_ms: 1_284, first_valid_response_ms: 418, output_tokens: 42, tokens_per_second: 38.6, tokens_estimated: false, output: "Mock connectivity test passed." });
     }
@@ -139,6 +153,29 @@ export function installDemoApi() {
         proxy_url: enabled ? "http://127.0.0.1:54321" : null,
       };
       return json(harnessStatus);
+    }
+    if (path === "/harness/cursor/language" && method === "GET") return json(cursorLanguage);
+    if (path === "/harness/cursor/language") {
+      const next = body as Partial<CursorLanguageStatus> | null;
+      cursorLanguage = {
+        ...cursorLanguage,
+        enabled: Boolean(next?.enabled),
+        mode: next?.mode ?? cursorLanguage.mode,
+        state: next?.enabled === false ? "disabled" : "applied",
+        error: null,
+      };
+      return json(cursorLanguage);
+    }
+    if (path === "/harness/cursor/install-path") {
+      const next = (body as { path?: string | null } | null)?.path ?? null;
+      cursorLanguage = {
+        ...cursorLanguage,
+        custom_path: next,
+        install_path: next ?? "C:\\Users\\demo\\AppData\\Local\\Programs\\cursor",
+        state: cursorLanguage.enabled ? "applied" : cursorLanguage.state,
+        error: null,
+      };
+      return json(cursorLanguage);
     }
     if (path === "/settings/observability" && method === "GET") return json({ detailed });
     if (path === "/settings/observability") {

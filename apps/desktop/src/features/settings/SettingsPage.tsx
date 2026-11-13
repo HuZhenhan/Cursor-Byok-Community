@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { api, type ProxySettings, type ProxySettingsInput, type StatisticsStorage, type StatisticsStorageScope, type TabSettings } from "../../shared/api";
 import { PageContent } from "../../shell/layout/PageContent";
-import { LegacyModelImport } from "../models/LegacyModelImport";
 import { AppLifecycleSettingsCard } from "./AppLifecycleSettingsCard";
 import { CommitSettingsCard } from "./CommitSettingsCard";
+import { CursorLanguageCard } from "./CursorLanguageCard";
 import { ExternalApiSettingsCard } from "./ExternalApiSettingsCard";
+import { ModelTransferCard } from "./ModelTransferCard";
 import { PricingSettingsCard } from "./PricingSettingsCard";
 import { ProxySettingsCard } from "./ProxySettingsCard";
 import { TabSettingsCard } from "./TabSettingsCard";
@@ -37,7 +38,7 @@ export function SettingsPage() {
   const [editingProxy, setEditingProxy] = useState(false);
   const [savingProxy, setSavingProxy] = useState(false);
   const [tabSettings, setTabSettings] = useState<TabSettings | null>(null);
-  const [tabDraft, setTabDraft] = useState<TabSettings>({ mode: "public", address: "" });
+  const [tabDraft, setTabDraft] = useState<TabSettings>({ mode: "local", address: "", model_id: "" });
   const [editingTab, setEditingTab] = useState(false);
   const [savingTab, setSavingTab] = useState(false);
   useEffect(() => {
@@ -141,6 +142,7 @@ export function SettingsPage() {
   const saveTab = async () => {
     try {
       if (tabDraft.mode === "custom" && !tabDraft.address.trim()) throw new Error(t("TAB 服务地址不能为空"));
+      if (tabDraft.mode === "local" && !tabDraft.model_id.trim()) throw new Error(t("请选择 TAB 模型"));
       setSavingTab(true);
       const saved = await api.setTabSettings({ ...tabDraft, address: tabDraft.address.trim() });
       setTabSettings(saved);
@@ -226,22 +228,13 @@ export function SettingsPage() {
         </div>
       </TitledCard>
       <ExternalApiSettingsCard servicePort={ports.service_port} />
+      <CursorLanguageCard />
       <ProxySettingsCard settings={outboundProxy} draft={proxyDraft} editing={editingProxy} saving={savingProxy} onDraftChange={setProxyDraft} onEdit={editProxy} onCancel={cancelProxyEdit} onSave={() => void saveProxy()} />
       <TabSettingsCard settings={tabSettings} draft={tabDraft} editing={editingTab} saving={savingTab} onDraftChange={setTabDraft} onEdit={editTab} onCancel={cancelTabEdit} onSave={() => void saveTab()} />
       <CommitSettingsCard />
       <PricingSettingsCard />
       <AppLifecycleSettingsCard />
-      <LegacyModelImport>{({ busy, previewing, open }) => <TitledCard title={t("导入")}>
-        <div className={styles.importRow}>
-          <div>
-            <strong>{t("旧版配置")}</strong>
-            <small>{t("从本机旧版配置读取模型；确认前会显示新增和已存在的模型。")}</small>
-          </div>
-          <Button size="small" disabled={busy} onClick={open}>
-            {previewing ? t("读取中…") : t("查看并导入")}
-          </Button>
-        </div>
-      </TitledCard>}</LegacyModelImport>
+      <ModelTransferCard />
       <TitledCard title={t("语言")}>
         <div className={styles.settingRow}>
           <div>

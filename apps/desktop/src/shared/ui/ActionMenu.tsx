@@ -1,10 +1,11 @@
 import { autoUpdate, computePosition, flip, offset, shift } from "@floating-ui/dom";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "./Button";
 import { Icon } from "./Icon";
-import { chevronDownIcon } from "./icons";
+import { chevronDownIcon, moreIcon } from "./icons";
 import styles from "./ActionMenu.module.scss";
+import controls from "./Controls.module.scss";
 
 export type ActionMenuItem =
   | {
@@ -21,10 +22,12 @@ export type ActionMenuItem =
     };
 
 /** 触发器 + 动作列表的下拉菜单,用于容纳卡片上的次要操作。 */
-export function ActionMenu({ label, items, disabled }: {
+export function ActionMenu({ label, items, disabled, iconOnly }: {
   label: string;
   items: ActionMenuItem[];
   disabled?: boolean;
+  /** 仅显示三点图标,适合放在列表行右侧的窄操作列。 */
+  iconOnly?: boolean;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -57,22 +60,41 @@ export function ActionMenu({ label, items, disabled }: {
     trigger.current?.focus();
   };
 
+  const toggle = () => setOpen((current) => !current);
+  const onTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === "Escape") close();
+  };
+
   return <>
-    <Button
-      ref={trigger}
-      size="small"
-      disabled={disabled}
-      aria-haspopup="menu"
-      aria-controls={open ? menuId : undefined}
-      aria-expanded={open}
-      onClick={() => setOpen((current) => !current)}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") close();
-      }}
-    >
-      {label}
-      <Icon icon={chevronDownIcon} size="1em" className={open ? styles.openIcon : undefined} />
-    </Button>
+    {iconOnly
+      ? <button
+        ref={trigger}
+        type="button"
+        className={controls.iconButton}
+        disabled={disabled}
+        aria-label={label}
+        title={label}
+        aria-haspopup="menu"
+        aria-controls={open ? menuId : undefined}
+        aria-expanded={open}
+        onClick={toggle}
+        onKeyDown={onTriggerKeyDown}
+      >
+        <Icon icon={moreIcon} size="1.1em" />
+      </button>
+      : <Button
+        ref={trigger}
+        size="small"
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-controls={open ? menuId : undefined}
+        aria-expanded={open}
+        onClick={toggle}
+        onKeyDown={onTriggerKeyDown}
+      >
+        {label}
+        <Icon icon={chevronDownIcon} size="1em" className={open ? styles.openIcon : undefined} />
+      </Button>}
     {open && createPortal(
       <div
         id={menuId}

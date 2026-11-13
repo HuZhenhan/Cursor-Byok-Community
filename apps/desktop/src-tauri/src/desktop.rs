@@ -87,6 +87,61 @@ struct OpenExternalUrlRequest {
     url: String,
 }
 
+/// 弹出系统另存为对话框并写入文本内容;用户取消时返回 `None`。
+#[tauri::command]
+async fn save_text_file(
+    contents: String,
+    suggested_name: String,
+) -> std::result::Result<Option<String>, String> {
+    let Some(file) = rfd::AsyncFileDialog::new()
+        .set_file_name(&suggested_name)
+        .add_filter("JSON", &["json"])
+        .save_file()
+        .await
+    else {
+        return Ok(None);
+    };
+    file.write(contents.as_bytes())
+        .await
+        .map_err(|error| format!("failed to write file: {error}"))?;
+    Ok(Some(file.path().display().to_string()))
+}
+
+#[derive(serde::Serialize)]
+struct OpenedTextFile {
+    path: String,
+    contents: String,
+}
+
+/// 弹出系统打开文件对话框并读取 UTF-8 文本;用户取消时返回 `None`。
+#[tauri::command]
+async fn open_text_file() -> std::result::Result<Option<OpenedTextFile>, String> {
+    let Some(file) = rfd::AsyncFileDialog::new()
+        .add_filter("JSON", &["json"])
+        .pick_file()
+        .await
+    else {
+        return Ok(None);
+    };
+    let path = file.path().display().to_string();
+    let contents = String::from_utf8(file.read().await)
+        .map_err(|_| "file is not valid UTF-8 text".to_string())?;
+    Ok(Some(OpenedTextFile { path, contents }))
+}
+
+/// 弹出系统目录选择器;用户取消时返回 `None`。
+#[tauri::command]
+async fn pick_directory(title: Option<String>) -> std::result::Result<Option<String>, String> {
+    let mut dialog = rfd::AsyncFileDialog::new();
+    if let Some(title) = title {
+        dialog = dialog.set_title(&title);
+    }
+    Ok(dialog
+        .pick_folder()
+        .await
+        .map(|folder| folder.path().display().to_string()))
+}
+
 fn open_external_url(app: &AppHandle, url: &str) -> std::result::Result<(), String> {
     let parsed = url::Url::parse(url).map_err(|error| format!("invalid URL: {error}"))?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
@@ -125,8 +180,8 @@ fn create_main_window(
         .expect("local frontend URL");
     let builder = WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, WebviewUrl::External(url))
         .title("Cursor BYOK")
-        .inner_size(820.0, 558.0)
-        .min_inner_size(820.0, 558.0)
+        .inner_size(1024.0, 640.0)
+        .min_inner_size(940.0, 560.0)
         .center()
         .background_color(Color(20, 20, 20, 255))
         .decorations(cfg!(target_os = "macos"))
@@ -195,6 +250,9 @@ pub fn run() -> ExitCode {
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             open_terminal_with_command,
+            save_text_file,
+            open_text_file,
+            pick_directory,
             crate::update::check_portable_update,
             crate::update::install_portable_update,
         ])
